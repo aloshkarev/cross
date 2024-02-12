@@ -894,7 +894,7 @@ impl Engine {
         docker.arg(UBUNTU_BASE);
         docker.args(["sh", "-c", cmd]);
 
-        docker.run(msg_info, false).map_err(Into::into)
+        docker.run(msg_info, false)
     }
 }
 
@@ -1035,8 +1035,7 @@ impl DockerCommandExt for Command {
 
         let runner = options.config.runner(&options.target)?;
         let cross_runner = format!("CROSS_RUNNER={}", runner.unwrap_or_default());
-        self.args(["-e", "PKG_CONFIG_ALLOW_CROSS=1"])
-            .args(["-e", &format!("XARGO_HOME={}", dirs.xargo_mount_path())])
+        self.args(["-e", &format!("XARGO_HOME={}", dirs.xargo_mount_path())])
             .args(["-e", &format!("CARGO_HOME={}", dirs.cargo_mount_path())])
             .args([
                 "-e",
@@ -1278,7 +1277,7 @@ pub fn get_image_name(
     };
 
     Ok(compatible
-        .get(0)
+        .first()
         .expect("should not be empty")
         .image_name(CROSS_IMAGE, version))
 }
@@ -1316,7 +1315,7 @@ pub fn get_image(
 
     let pick = if compatible.len() == 1 {
         // If only one match, use that
-        compatible.get(0).expect("should not be empty")
+        compatible.first().expect("should not be empty")
     } else if compatible
         .iter()
         .filter(|provided| provided.sub.is_none())

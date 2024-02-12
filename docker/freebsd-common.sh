@@ -4,7 +4,7 @@ set -x
 set -euo pipefail
 
 # shellcheck disable=SC1091
-. freebsd-arch.sh
+. /freebsd-arch.sh
 
 export FREEBSD_ARCH=
 case "${ARCH}" in
@@ -19,4 +19,4 @@ case "${ARCH}" in
         ;;
 esac
 
-export FREEBSD_MAJOR=12
+export FREEBSD_MAJOR=13

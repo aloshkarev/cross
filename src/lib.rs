@@ -624,6 +624,10 @@ pub fn run(
                     false,
                 );
 
+                if msg_info.should_fail() {
+                    return Ok(None);
+                }
+
                 install_interpreter_if_needed(
                     &args,
                     host_version_meta,
@@ -631,14 +635,20 @@ pub fn run(
                     &options,
                     msg_info,
                 )?;
-                let status = docker::run(
+                let status = if let Some(status) = docker::run(
                     options,
                     paths,
                     &filtered_args,
                     args.subcommand.clone(),
                     msg_info,
                 )
-                .wrap_err("could not run container")?;
+                .wrap_err("could not run container")?
+                {
+                    status
+                } else {
+                    return Ok(None);
+                };
+
                 let needs_host = args.subcommand.map_or(false, |sc| sc.needs_host(is_remote));
                 if !status.success() {
                     warn_on_failure(&target, &toolchain, msg_info)?;
@@ -752,7 +762,7 @@ pub fn setup(
 ) -> Result<Option<CrossSetup>, color_eyre::Report> {
     let host = host_version_meta.host();
     let toml = toml(metadata, msg_info)?;
-    let config = Config::new(toml);
+    let config = Config::new(Some(toml));
     let target = args
         .target
         .clone()
@@ -857,19 +867,19 @@ pub(crate) fn warn_host_version_mismatch(
         );
         if versions.is_lt() || (versions.is_eq() && dates.is_lt()) {
             if cfg!(not(test)) {
-                msg_info.warn(format_args!("using older {rustc_warning}.\n > Update with `rustup update --force-non-host {toolchain}`"))?;
+                msg_info.info(format_args!("using older {rustc_warning}.\n > Update with `rustup update --force-non-host {toolchain}`"))?;
             }
             return Ok(VersionMatch::OlderTarget);
         } else if versions.is_gt() || (versions.is_eq() && dates.is_gt()) {
             if cfg!(not(test)) {
-                msg_info.warn(format_args!(
+                msg_info.info(format_args!(
                     "using newer {rustc_warning}.\n > Update with `rustup update`"
                 ))?;
             }
             return Ok(VersionMatch::NewerTarget);
         } else {
             if cfg!(not(test)) {
-                msg_info.warn(format_args!("using {rustc_warning}."))?;
+                msg_info.info(format_args!("using {rustc_warning}."))?;
             }
             return Ok(VersionMatch::Different);
         }
@@ -893,39 +903,78 @@ macro_rules! commit_info {
 /// These locations are checked in the following order:
 /// 1. If the `CROSS_CONFIG` variable is set, it tries to read the config from its value
 /// 2. Otherwise, the `Cross.toml` in the project root is used
-/// 3. Package metadata in the Cargo.toml
+/// 3. Package and workspace metadata in the Cargo.toml
 ///
-/// The values from `CROSS_CONFIG` or `Cross.toml` are concatenated with the package
+/// The values from `CROSS_CONFIG` or `Cross.toml` are concatenated with the
 /// metadata in `Cargo.toml`, with `Cross.toml` having the highest priority.
-pub fn toml(metadata: &CargoMetadata, msg_info: &mut MessageInfo) -> Result<Option<CrossToml>> {
+pub fn toml(metadata: &CargoMetadata, msg_info: &mut MessageInfo) -> Result<CrossToml> {
     let root = &metadata.workspace_root;
     let cross_config_path = match env::var("CROSS_CONFIG") {
         Ok(var) => PathBuf::from(var),
         Err(_) => root.join("Cross.toml"),
     };
 
-    // Attempts to read the cross config from the Cargo.toml
-    let cargo_toml_str =
-        file::read(root.join("Cargo.toml")).wrap_err("failed to read Cargo.toml")?;
-
-    if cross_config_path.exists() {
+    let mut config = if cross_config_path.exists() {
         let cross_toml_str = file::read(&cross_config_path)
             .wrap_err_with(|| format!("could not read file `{cross_config_path:?}`"))?;
 
-        let (config, _) = CrossToml::parse(&cargo_toml_str, &cross_toml_str, msg_info)
-            .wrap_err_with(|| format!("failed to parse file `{cross_config_path:?}` as TOML",))?;
+        let (config, _) = CrossToml::parse_from_cross_str(
+            &cross_toml_str,
+            Some(cross_config_path.to_utf8()?),
+            msg_info,
+        )
+        .wrap_err_with(|| format!("failed to parse file `{cross_config_path:?}` as TOML",))?;
 
-        Ok(Some(config))
+        config
     } else {
         // Checks if there is a lowercase version of this file
         if root.join("cross.toml").exists() {
             msg_info.warn("There's a file named cross.toml, instead of Cross.toml. You may want to rename it, or it won't be considered.")?;
         }
+        CrossToml::default()
+    };
+    let mut found: Option<std::borrow::Cow<'_, str>> = None;
 
-        if let Some((cfg, _)) = CrossToml::parse_from_cargo(&cargo_toml_str, msg_info)? {
-            Ok(Some(cfg))
-        } else {
-            Ok(None)
+    if let Some(workspace_metadata) = &metadata.metadata {
+        let workspace_metadata =
+            serde_json::de::from_str::<serde_json::Value>(workspace_metadata.get())?;
+        if let Some(cross) = dbg!(workspace_metadata.get("cross")) {
+            found = Some(
+                metadata
+                    .workspace_root
+                    .join("Cargo.toml")
+                    .to_utf8()?
+                    .to_owned()
+                    .into(),
+            );
+            let (workspace_config, _) =
+                CrossToml::parse_from_deserializer(cross, found.as_deref(), msg_info)?;
+            config = config.merge(workspace_config)?;
         }
     }
+
+    for (package, package_metadata) in metadata
+        .packages
+        .iter()
+        .filter_map(|p| Some((p.manifest_path.as_path(), p.metadata.as_deref()?)))
+    {
+        let package_metadata =
+            serde_json::de::from_str::<serde_json::Value>(package_metadata.get())?;
+
+        if let Some(cross) = package_metadata.get("cross") {
+            if let Some(found) = &found {
+                msg_info.warn(format_args!("Found conflicting cross configuration in `{}`, use `[workspace.metadata.cross]` in the workspace manifest instead.\nCurrently only using configuration from `{}`", package.to_utf8()?, found))?;
+                continue;
+            }
+            let (workspace_config, _) = CrossToml::parse_from_deserializer(
+                cross,
+                Some(metadata.workspace_root.join("Cargo.toml").to_utf8()?),
+                msg_info,
+            )?;
+            config = config.merge(workspace_config)?;
+            found = Some(package.to_utf8()?.into());
+        }
+    }
+
+    Ok(config)
 }
