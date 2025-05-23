@@ -19,7 +19,7 @@ build_static_libffi () {
     tar --strip-components=1 -xzf "v${version}.tar.gz"
     ./configure --prefix="$td"/lib --disable-builddir --disable-shared --enable-static
     make "-j$(nproc)"
-    install -m 644 ./.libs/libffi.a /usr/lib64/
+    install -m 644 ./.libs/libffi.a /usr/local/lib/
 
     popd
 
@@ -42,7 +42,7 @@ build_static_libmount () {
     tar --strip-components=1 -xJf "util-linux-${version_spec}.tar.xz"
     ./configure --disable-shared --enable-static --without-ncurses
     make "-j$(nproc)" mount blkid
-    install -m 644 ./.libs/*.a /usr/lib64/
+    install -m 644 ./.libs/*.a /usr/local/lib/
 
     popd
 
@@ -67,7 +67,7 @@ build_static_libattr() {
 
     ./configure
     make "-j$(nproc)"
-    install -m 644 ./libattr/.libs/libattr.a /usr/lib64/
+    install -m 644 ./libattr/.libs/libattr.a /usr/local/lib/
 
     yum remove -y gettext
 
@@ -87,7 +87,7 @@ build_static_libcap() {
     curl --retry 3 -sSfL "https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-${version}.tar.xz" -O
     tar --strip-components=1 -xJf "libcap-${version}.tar.xz"
     make "-j$(nproc)"
-    install -m 644 libcap/libcap.a /usr/lib64/
+    install -m 644 libcap/libcap.a /usr/local/lib/
 
     popd
 
@@ -106,7 +106,7 @@ build_static_pixman() {
     tar --strip-components=1 -xzf "pixman-${version}.tar.gz"
     ./configure
     make "-j$(nproc)"
-    install -m 644 ./pixman/.libs/libpixman-1.a /usr/lib64/
+    install -m 644 ./pixman/.libs/libpixman-1.a /usr/local/lib/
 
     popd
 
@@ -125,7 +125,7 @@ build_static_slirp() {
     tar -xzf "libslirp-v${version}.tar.gz"
     meson setup -Ddefault_library=static libslirp-v${version} build
     ninja -C build
-    install -m 644 ./build/libslirp.a /usr/lib64/
+    install -m 644 ./build/libslirp.a /usr/local/lib/
 
     popd
 
@@ -173,8 +173,12 @@ main() {
         zlib-devel \
         zlib-static
 
-    if_centos 'curl --retry 3 -sSfL "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.guess;hb=HEAD" -o /usr/share/automake*/config.guess'
-    if_centos 'curl --retry 3 -sSfL "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=HEAD" -o /usr/share/automake*/config.sub'
+    ### See this thread in case there are other issues regarding Savannah from gnu
+    ### https://lists.nongnu.org/archive/html/savannah-hackers-public/2025-04/msg00003.html
+    ### This link should be a good reference for the config.git repository: https://cgit.git.savannah.gnu.org/cgit/config.git/
+
+    if_centos 'curl --retry 3 -sSfL "https://gitweb.git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.guess;hb=HEAD" -o /usr/share/automake*/config.guess'
+    if_centos 'curl --retry 3 -sSfL "https://gitweb.git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=HEAD" -o /usr/share/automake*/config.sub'
 
     # these are not packaged as static libraries in centos; build them manually
     if_centos build_static_libffi
